@@ -1,0 +1,33 @@
+services:
+  # ── WebSocket Game Server ──────────────────────────────────────────────────
+  - type: web
+    name: mmo-server
+    runtime: rust
+    buildCommand: cargo build --release --bin server
+    startCommand: ./target/release/server
+    envVars:
+      - key: PORT
+        value: 8080   # Render overrides this with its own PORT automatically
+    # Uncomment below for WSS with your own cert (not needed on Render):
+    # - key: TLS_CERT_PATH
+    #   value: /etc/ssl/certs/cert.pem
+    # - key: TLS_KEY_PATH
+    #   value: /etc/ssl/private/key.pem
+
+  # ── Static Site (WASM client) ──────────────────────────────────────────────
+  - type: web
+    name: mmo-client
+    runtime: static
+    staticPublishPath: ./web
+    buildCommand: bash build_wasm.sh
+    envVars:
+      # Set this to your mmo-server Render URL after the server service is created
+      - key: WS_URL
+        value: wss://mmo-server.onrender.com
+    headers:
+      - path: /*
+        name: Cross-Origin-Embedder-Policy
+        value: require-corp
+      - path: /*
+        name: Cross-Origin-Opener-Policy
+        value: same-origin
