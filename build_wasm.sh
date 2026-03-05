@@ -15,25 +15,41 @@ cargo build --release --bin client --target wasm32-unknown-unknown
 # Copy WASM into web/
 cp target/wasm32-unknown-unknown/release/client.wasm web/client.wasm
 
-# Copy the local macroquad JS bundle (version-matched to the compiled WASM)
-REGISTRY="$HOME/.cargo/registry/src"
-REGISTRY_ROOT=$(ls -d "$REGISTRY"/*/  | head -1)
-MQ_DIR=$(ls -d "${REGISTRY_ROOT}"macroquad-*/ 2>/dev/null | sort -r | head -1)
+# ── Locate mq_js_bundle.js ────────────────────────────────────────────────────
+# Try common cargo registry locations (local dev, Render, CI, etc.)
+MQ_VERSION=$(grep -A1 'name = "macroquad"' Cargo.lock | grep version | head -1 | sed 's/.*"\(.*\)".*/\1/')
+echo "macroquad version from Cargo.lock: $MQ_VERSION"
 
-if [ -n "$MQ_DIR" ] && [ -f "${MQ_DIR}js/mq_js_bundle.js" ]; then
-    echo "Using macroquad bundle: ${MQ_DIR}js/mq_js_bundle.js"
-    cp "${MQ_DIR}js/mq_js_bundle.js" web/mq_js_bundle.js
+BUNDLE_SRC=""
+
+# Search all known registry root candidates
+for REGISTRY_ROOT in \
+    "$HOME/.cargo/registry/src/"*/ \
+    "/opt/render/.cargo/registry/src/"*/ \
+    "/root/.cargo/registry/src/"*/; do
+    CANDIDATE="${REGISTRY_ROOT}macroquad-${MQ_VERSION}/js/mq_js_bundle.js"
+    if [ -f "$CANDIDATE" ]; then
+        BUNDLE_SRC="$CANDIDATE"
+        echo "Found local bundle: $BUNDLE_SRC"
+        break
+    fi
+done
+
+if [ -n "$BUNDLE_SRC" ]; then
+    cp "$BUNDLE_SRC" web/mq_js_bundle.js
 else
-    echo "ERROR: Could not find local macroquad JS bundle" >&2
-    exit 1
+    # Fall back to downloading the exact version from GitHub
+    DOWNLOAD_URL="https://raw.githubusercontent.com/not-fl3/macroquad/v${MQ_VERSION}/js/mq_js_bundle.js"
+    echo "Local bundle not found. Downloading from: $DOWNLOAD_URL"
+    curl -fL "$DOWNLOAD_URL" -o web/mq_js_bundle.js
 fi
 
-# Patch 1: expose consume_js_object and js_object as globals
-# (sapp_jsutils defines them as locals; quad_net calls them as globals)
+# ── Patch 1: expose consume_js_object / js_object as globals ─────────────────
+# sapp_jsutils defines them as locals; quad_net calls them as globals.
 sed -i 's/function a(t){var n=e\[t\];return delete e\[t\],n}function r(t){return e\[t\]}}/function a(t){var n=e[t];return delete e[t],n}function r(t){return e[t]}window.consume_js_object=a;window.js_object=t}/' web/mq_js_bundle.js
 
-# Patch 2: ws_try_recv — unwrap the {text, data} wrapper and return the raw
-# Uint8Array so Rust's to_byte_buffer() reads actual message bytes
+# ── Patch 2: ws_try_recv — unwrap {text,data} and return the raw Uint8Array ──
+# so Rust's to_byte_buffer() reads actual message bytes instead of empty.
 sed -i 's/function c(){return n\.length!=0?js_object(n\.shift()):-1}/function c(){if(n.length!=0){var m=n.shift();return js_object(m.data!=null?m.data:m)}return -1}/' web/mq_js_bundle.js
 
 echo "Build complete. web/ is ready to serve."
