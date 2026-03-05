@@ -73,7 +73,7 @@ impl Server {
             };
 
             match msg {
-                ClientMessage::Join { name: _ } => {
+                ClientMessage::Join { name } => {
                     let id = {
                         let mut next_id = self.next_id.write().await;
                         let id = *next_id;
@@ -82,8 +82,15 @@ impl Server {
                     };
                     player_id = Some(id);
 
+                    let display_name = if name.trim().is_empty() {
+                        format!("Player{}", id)
+                    } else {
+                        name.trim().chars().take(20).collect()
+                    };
+
                     let player = Player {
                         id,
+                        name: display_name,
                         x: 0.0,
                         y: 0.0,
                         color: (

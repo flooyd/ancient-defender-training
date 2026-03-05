@@ -214,14 +214,16 @@ impl RemotePlayer {
 
 struct GameState {
     my_id: Option<u32>,
+    my_name: String,
     remote_players: HashMap<u32, RemotePlayer>,
     my_pos: (f32, f32),
 }
 
 impl GameState {
-    fn new() -> Self {
+    fn new(name: String) -> Self {
         GameState {
             my_id: None,
+            my_name: name,
             remote_players: HashMap::new(),
             my_pos: (0.0, 0.0),
         }
@@ -246,7 +248,44 @@ fn window_conf() -> Conf {
 
 #[macroquad::main(window_conf)]
 async fn main() {
-    let mut game_state = GameState::new();
+    // ── Name entry screen ─────────────────────────────────────────────────────
+    let mut player_name = String::new();
+    loop {
+        while let Some(c) = get_char_pressed() {
+            if !c.is_control() && player_name.len() < 20 {
+                player_name.push(c);
+            }
+        }
+        if is_key_pressed(KeyCode::Backspace) && !player_name.is_empty() {
+            player_name.pop();
+        }
+        if is_key_pressed(KeyCode::Enter) && !player_name.is_empty() {
+            break;
+        }
+
+        clear_background(BLACK);
+        let sw = screen_width();
+        let sh = screen_height();
+        let prompt = "Enter your name:";
+        let pdim = measure_text(prompt, None, 32, 1.0);
+        draw_text(prompt, sw / 2.0 - pdim.width / 2.0, sh / 2.0 - 40.0, 32.0, WHITE);
+        let input_display = format!("{}_", player_name);
+        let idim = measure_text(&input_display, None, 28, 1.0);
+        draw_rectangle(
+            sw / 2.0 - idim.width / 2.0 - 10.0,
+            sh / 2.0 - 10.0,
+            idim.width + 20.0,
+            40.0,
+            Color::from_rgba(40, 40, 40, 255),
+        );
+        draw_text(&input_display, sw / 2.0 - idim.width / 2.0, sh / 2.0 + 22.0, 28.0, YELLOW);
+        let hint = "Press Enter to join";
+        let hdim = measure_text(hint, None, 18, 1.0);
+        draw_text(hint, sw / 2.0 - hdim.width / 2.0, sh / 2.0 + 60.0, 18.0, GRAY);
+        next_frame().await;
+    }
+
+    let mut game_state = GameState::new(player_name.clone());
 
     // ── Connect ──────────────────────────────────────────────────────────────
     // Native: WsClient::connect blocks until the TCP+WS handshake succeeds.
@@ -281,7 +320,7 @@ async fn main() {
     }
 
     send_msg(&ws, &ClientMessage::Join {
-        name: "Player".to_string(),
+        name: player_name,
     });
 
     // ── Camera state ──────────────────────────────────────────────────────────
@@ -457,11 +496,10 @@ async fn main() {
             2.0,
             YELLOW,
         );
-        if let Some(my_id) = game_state.my_id {
-            let txt = format!("{}", my_id);
-            let dim = measure_text(&txt, None, 20, 1.0);
+        {
+            let dim = measure_text(&game_state.my_name, None, 20, 1.0);
             draw_text(
-                &txt,
+                &game_state.my_name,
                 game_state.my_pos.0 - dim.width / 2.0,
                 game_state.my_pos.1 - 22.0,
                 20.0,
@@ -478,10 +516,9 @@ async fn main() {
                 255,
             );
             draw_circle(remote.visual_x, remote.visual_y, 15.0, color);
-            let txt = format!("{}", remote.player.id);
-            let dim = measure_text(&txt, None, 20, 1.0);
+            let dim = measure_text(&remote.player.name, None, 20, 1.0);
             draw_text(
-                &txt,
+                &remote.player.name,
                 remote.visual_x - dim.width / 2.0,
                 remote.visual_y - 22.0,
                 20.0,
@@ -507,9 +544,7 @@ async fn main() {
             18.0,
             WHITE,
         );
-        if let Some(id) = game_state.my_id {
-            draw_text(&format!("Your ID: {}", id), 10.0, 64.0, 18.0, YELLOW);
-        }
+        draw_text(&format!("Your name: {}", game_state.my_name), 10.0, 64.0, 18.0, YELLOW);
         draw_text(
             &format!("Camera: ({:.0}, {:.0})", camera_x, camera_y),
             10.0,
