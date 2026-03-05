@@ -40,6 +40,7 @@ impl Server {
         };
 
         let mut player_id: Option<u32> = None;
+        let mut authenticated = false;
         let mut rx = self.tx.subscribe();
         let (mut sink, mut stream) = ws_stream.split();
 
@@ -73,7 +74,16 @@ impl Server {
             };
 
             match msg {
-                ClientMessage::Join { name } => {
+                ClientMessage::Join { name, password } => {
+                    let expected_pw = std::env::var("SERVER_PASSWORD").unwrap_or_default();
+                    if !expected_pw.is_empty() && password != expected_pw {
+                        let _ = client_tx.send(ServerMessage::Rejected {
+                            reason: "Wrong password.".to_string(),
+                        });
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                        break;
+                    }
+                    authenticated = true;
                     let id = {
                         let mut next_id = self.next_id.write().await;
                         let id = *next_id;
@@ -115,6 +125,7 @@ impl Server {
                     println!("Player {} joined", id);
                 }
                 ClientMessage::Move { x, y } => {
+                    if !authenticated { continue; }
                     if let Some(id) = player_id {
                         {
                             let mut players = self.players.write().await;
@@ -143,6 +154,7 @@ impl Server {
 
 #[tokio::main]
 async fn main() {
+    dotenvy::dotenv().ok();
     let port: u16 = std::env::var("PORT")
         .ok()
         .and_then(|p| p.parse().ok())

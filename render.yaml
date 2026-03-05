@@ -8,6 +8,10 @@ services:
     envVars:
       - key: PORT
         value: 8080   # Render overrides this with its own PORT automatically
+      # Set SERVER_PASSWORD in the Render dashboard (Environment → Secret Files
+      # or Environment Variables). Do NOT commit the real value here.
+      - key: SERVER_PASSWORD
+        sync: false   # must be set manually in Render dashboard
     # Uncomment below for WSS with your own cert (not needed on Render):
     # - key: TLS_CERT_PATH
     #   value: /etc/ssl/certs/cert.pem

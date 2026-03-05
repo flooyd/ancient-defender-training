@@ -248,40 +248,75 @@ fn window_conf() -> Conf {
 
 #[macroquad::main(window_conf)]
 async fn main() {
-    // ── Name entry screen ─────────────────────────────────────────────────────
+    let mut login_error: Option<String> = None;
+
+    'login: loop {
+
+    // ── Login screen (name + password) ────────────────────────────────────────
+    let mut focus_name = true;
     let mut player_name = String::new();
+    let mut password = String::new();
     loop {
         while let Some(c) = get_char_pressed() {
-            if !c.is_control() && player_name.len() < 20 {
-                player_name.push(c);
+            if c.is_control() { continue; }
+            if focus_name { if player_name.len() < 20 { player_name.push(c); } }
+            else          { if password.len() < 30    { password.push(c); }    }
+        }
+        if is_key_pressed(KeyCode::Backspace) {
+            if focus_name { player_name.pop(); } else { password.pop(); }
+        }
+        if is_key_pressed(KeyCode::Tab) {
+            focus_name = !focus_name;
+        }
+        if is_key_pressed(KeyCode::Enter) {
+            if focus_name && player_name.len() >= 3 {
+                focus_name = false;
+            } else if !focus_name && player_name.len() >= 3 && password.len() >= 3 {
+                break;
             }
         }
-        if is_key_pressed(KeyCode::Backspace) && !player_name.is_empty() {
-            player_name.pop();
-        }
-        if is_key_pressed(KeyCode::Enter) && !player_name.is_empty() {
-            break;
-        }
 
-        clear_background(BLACK);
         let sw = screen_width();
         let sh = screen_height();
-        let prompt = "Enter your name:";
-        let pdim = measure_text(prompt, None, 32, 1.0);
-        draw_text(prompt, sw / 2.0 - pdim.width / 2.0, sh / 2.0 - 40.0, 32.0, WHITE);
-        let input_display = format!("{}_", player_name);
-        let idim = measure_text(&input_display, None, 28, 1.0);
-        draw_rectangle(
-            sw / 2.0 - idim.width / 2.0 - 10.0,
-            sh / 2.0 - 10.0,
-            idim.width + 20.0,
-            40.0,
-            Color::from_rgba(40, 40, 40, 255),
-        );
-        draw_text(&input_display, sw / 2.0 - idim.width / 2.0, sh / 2.0 + 22.0, 28.0, YELLOW);
-        let hint = "Press Enter to join";
+        clear_background(BLACK);
+
+        if let Some(ref err) = login_error {
+            let edim = measure_text(err, None, 22, 1.0);
+            draw_text(err, sw / 2.0 - edim.width / 2.0, sh / 2.0 - 130.0, 22.0, RED);
+        }
+        let title = "Enter your details";
+        let tdim = measure_text(title, None, 32, 1.0);
+        draw_text(title, sw / 2.0 - tdim.width / 2.0, sh / 2.0 - 90.0, 32.0, WHITE);
+
+        // Name field
+        {
+            let color = if focus_name { YELLOW } else { GRAY };
+            draw_text("Name:", sw / 2.0 - 160.0, sh / 2.0 - 20.0, 20.0, color);
+            let display = format!("{}{}", player_name, if focus_name { "_" } else { "" });
+            draw_rectangle(sw / 2.0 - 60.0, sh / 2.0 - 42.0, 220.0, 30.0, Color::from_rgba(40, 40, 40, 255));
+            draw_rectangle_lines(sw / 2.0 - 60.0, sh / 2.0 - 42.0, 220.0, 30.0, 2.0, color);
+            draw_text(&display, sw / 2.0 - 50.0, sh / 2.0 - 20.0, 22.0, color);
+        }
+
+        // Password field
+        {
+            let color = if !focus_name { YELLOW } else { GRAY };
+            draw_text("Password:", sw / 2.0 - 160.0, sh / 2.0 + 30.0, 20.0, color);
+            let pw_display = format!("{}{}", "\u{25cf}".repeat(password.len()), if !focus_name { "_" } else { "" });
+            draw_rectangle(sw / 2.0 - 60.0, sh / 2.0 + 8.0, 220.0, 30.0, Color::from_rgba(40, 40, 40, 255));
+            draw_rectangle_lines(sw / 2.0 - 60.0, sh / 2.0 + 8.0, 220.0, 30.0, 2.0, color);
+            draw_text(&pw_display, sw / 2.0 - 50.0, sh / 2.0 + 30.0, 22.0, color);
+        }
+
+        let hint = if player_name.len() < 3 { "Name: minimum 3 characters" }
+                   else if password.len() < 3 { "Password: minimum 3 characters" }
+                   else { "Press Enter to join" };
         let hdim = measure_text(hint, None, 18, 1.0);
-        draw_text(hint, sw / 2.0 - hdim.width / 2.0, sh / 2.0 + 60.0, 18.0, GRAY);
+        draw_text(hint, sw / 2.0 - hdim.width / 2.0, sh / 2.0 + 75.0, 18.0, GRAY);
+        let tab_hint = "Tab: switch field";
+        let thdim = measure_text(tab_hint, None, 16, 1.0);
+        draw_text(tab_hint, sw / 2.0 - thdim.width / 2.0, sh / 2.0 + 98.0, 16.0, Color::from_rgba(100, 100, 100, 255));
+
         next_frame().await;
     }
 
@@ -321,7 +356,30 @@ async fn main() {
 
     send_msg(&ws, &ClientMessage::Join {
         name: player_name,
+        password: password.clone(),
     });
+
+    // ── Wait for Welcome or Rejected ─────────────────────────────────────────
+    'auth: loop {
+        while let Some(data) = ws.try_recv() {
+            if let Ok(msg) = bincode::deserialize::<ServerMessage>(&data) {
+                match msg {
+                    ServerMessage::Welcome { player_id } => {
+                        game_state.my_id = Some(player_id);
+                        break 'auth;
+                    }
+                    ServerMessage::Rejected { reason } => {
+                        login_error = Some(reason);
+                        continue 'login;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        clear_background(BLACK);
+        draw_text("Authenticating...", 20.0, 30.0, 24.0, WHITE);
+        next_frame().await;
+    }
 
     // ── Camera state ──────────────────────────────────────────────────────────
     let mut camera_x = 0.0f32;
@@ -345,9 +403,6 @@ async fn main() {
         while let Some(data) = ws.try_recv() {
             if let Ok(msg) = bincode::deserialize::<ServerMessage>(&data) {
                 match msg {
-                    ServerMessage::Welcome { player_id } => {
-                        game_state.my_id = Some(player_id);
-                    }
                     ServerMessage::WorldState { players } => {
                         game_state.remote_players.clear();
                         for player in players {
@@ -379,6 +434,7 @@ async fn main() {
                     ServerMessage::PlayerLeft { player_id } => {
                         game_state.remote_players.remove(&player_id);
                     }
+                    _ => {}
                 }
             }
         }
@@ -554,5 +610,7 @@ async fn main() {
         );
 
         next_frame().await;
-    }
+    } // end game loop
+
+    } // end 'login loop
 }

@@ -11,7 +11,7 @@ pub struct Player {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ClientMessage {
-    Join { name: String },
+    Join { name: String, password: String },
     Move { x: f32, y: f32 },
     Disconnect,
 }
@@ -19,6 +19,7 @@ pub enum ClientMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]  // Added Clone here
 pub enum ServerMessage {
     Welcome { player_id: u32 },
+    Rejected { reason: String },
     PlayerJoined { player: Player },
     PlayerMoved { player_id: u32, x: f32, y: f32 },
     PlayerLeft { player_id: u32 },
