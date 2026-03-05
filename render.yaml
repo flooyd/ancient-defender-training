@@ -23,7 +23,7 @@ services:
     envVars:
       # Set this to your mmo-server Render URL after the server service is created
       - key: WS_URL
-        value: https://mmo-client-xk4a.onrender.com
+        value: https://mmo-server-qali.onrender.com
     headers:
       - path: /*
         name: Cross-Origin-Embedder-Policy
