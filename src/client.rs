@@ -4,6 +4,31 @@ use macroquad::prelude::*;
 use protocol::*;
 use std::collections::HashMap;
 
+// ─── Invoker stats (Dota 2) ───────────────────────────────────────────────────
+// Dota 2 turn rate is a per-tick lerp factor at 30 ticks/s:
+//   new_facing = old_facing + turn_rate * remaining_angle   (each tick)
+// This gives the characteristic exponential-decay "floaty" Dota turn feel.
+// Invoker's turn rate is 0.5 — one of the lowest in the game.
+const INVOKER_SPEED: f32 = 280.0;   // world-units per second
+const INVOKER_TURN_RATE: f32 = 0.5; // fraction of remaining angle closed per tick
+const DOTA_TICK_RATE: f32 = 30.0;   // Dota 2 server tick rate
+
+/// Signed angle from `from` to `to`, in [-π, π].
+fn angle_diff(from: f32, to: f32) -> f32 {
+    let diff = (to - from).rem_euclid(std::f32::consts::TAU);
+    if diff > std::f32::consts::PI { diff - std::f32::consts::TAU } else { diff }
+}
+
+/// Dota 2-style lerp turn: closes `INVOKER_TURN_RATE` fraction of the
+/// remaining angle each game tick (30/s), giving exponential decay.
+fn dota_turn_toward(current: f32, desired: f32, delta: f32) -> f32 {
+    let diff = angle_diff(current, desired);
+    if diff == 0.0 { return current; }
+    // decay remaining angle by (1 - turn_rate) per tick over `delta` seconds
+    let remaining_frac = (1.0_f32 - INVOKER_TURN_RATE).powf(delta * DOTA_TICK_RATE);
+    current + diff * (1.0 - remaining_frac)
+}
+
 // ─── Platform-specific WebSocket wrapper ─────────────────────────────────────
 //
 // Native: tungstenite (sync) runs in a background thread; main thread
@@ -217,6 +242,10 @@ struct GameState {
     my_name: String,
     remote_players: HashMap<u32, RemotePlayer>,
     my_pos: (f32, f32),
+    /// Right-click destination in world space; None = standing still.
+    move_target: Option<(f32, f32)>,
+    /// Current facing angle in radians (0 = right, π/2 = down).
+    facing_angle: f32,
 }
 
 impl GameState {
@@ -226,6 +255,8 @@ impl GameState {
             my_name: name,
             remote_players: HashMap::new(),
             my_pos: (0.0, 0.0),
+            move_target: None,
+            facing_angle: 0.0,
         }
     }
 }
@@ -474,36 +505,61 @@ async fn main() {
             }
         }
 
-        camera_x = camera_x.clamp(-1000.0, 1000.0);
-        camera_y = camera_y.clamp(-1000.0, 1000.0);
+        camera_x = camera_x.clamp(-8192.0, 8192.0);
+        camera_y = camera_y.clamp(-8192.0, 8192.0);
 
         // ── Player movement ─────────────────────────────────────────────────
+        // sw/sh needed here for world-space mouse conversion
+        let sw = screen_width();
+        let sh = screen_height();
+
         let mut moved = false;
-        let speed = 200.0 * delta;
-        {
-            let mut dx = 0.0f32;
-            let mut dy = 0.0f32;
-            if is_key_down(KeyCode::W) || is_key_down(KeyCode::Up) {
-                dy -= 1.0;
-            }
-            if is_key_down(KeyCode::S) || is_key_down(KeyCode::Down) {
-                dy += 1.0;
-            }
-            if is_key_down(KeyCode::A) || is_key_down(KeyCode::Left) {
-                dx -= 1.0;
-            }
-            if is_key_down(KeyCode::D) || is_key_down(KeyCode::Right) {
-                dx += 1.0;
-            }
-            if dx != 0.0 || dy != 0.0 {
-                let len = (dx * dx + dy * dy).sqrt();
-                game_state.my_pos.0 += (dx / len) * speed;
-                game_state.my_pos.1 += (dy / len) * speed;
-                moved = true;
-            }
-            game_state.my_pos.0 = game_state.my_pos.0.clamp(-980.0, 980.0);
-            game_state.my_pos.1 = game_state.my_pos.1.clamp(-980.0, 980.0);
+
+        // Right-click → set move destination in world space
+        if is_mouse_button_pressed(MouseButton::Right) {
+            let (mx, my) = mouse_position();
+            // Camera2D with zoom=(2/sw, 2/sh): world = camera + (screen - center)
+            let world_x = camera_x + (mx - sw * 0.5);
+            let world_y = camera_y + (my - sh * 0.5);
+            game_state.move_target = Some((world_x, world_y));
         }
+
+        // S key → stop movement
+        if is_key_pressed(KeyCode::S) {
+            game_state.move_target = None;
+        }
+
+        // Move toward target (Invoker speed + turn rate)
+        if let Some((tx, ty)) = game_state.move_target {
+            let dx = tx - game_state.my_pos.0;
+            let dy = ty - game_state.my_pos.1;
+            let dist = (dx * dx + dy * dy).sqrt();
+
+            if dist > 1.0 {
+                // Rotate facing angle toward movement direction (Dota 2 lerp model)
+                let desired_angle = dy.atan2(dx);
+                game_state.facing_angle = dota_turn_toward(
+                    game_state.facing_angle, desired_angle, delta
+                );
+
+                // Move toward target while turning
+                let step = INVOKER_SPEED * delta;
+                if step >= dist {
+                    game_state.my_pos.0 = tx;
+                    game_state.my_pos.1 = ty;
+                    game_state.move_target = None;
+                } else {
+                    game_state.my_pos.0 += (dx / dist) * step;
+                    game_state.my_pos.1 += (dy / dist) * step;
+                }
+                moved = true;
+            } else {
+                game_state.move_target = None;
+            }
+        }
+
+        game_state.my_pos.0 = game_state.my_pos.0.clamp(-8192.0, 8192.0);
+        game_state.my_pos.1 = game_state.my_pos.1.clamp(-8192.0, 8192.0);
 
         for remote in game_state.remote_players.values_mut() {
             remote.interpolate(delta);
@@ -521,8 +577,7 @@ async fn main() {
         }
 
         // ── Render ──────────────────────────────────────────────────────────
-        let sw = screen_width();
-        let sh = screen_height();
+        // (sw / sh already computed above for movement)
         clear_background(Color::from_rgba(144, 238, 144, 255));
 
         set_camera(&Camera2D {
@@ -531,7 +586,7 @@ async fn main() {
             ..Default::default()
         });
 
-        draw_rectangle_lines(-1000.0, -1000.0, 2000.0, 2000.0, 4.0, DARKGREEN);
+        draw_rectangle_lines(-8192.0, -8192.0, 16384.0, 16384.0, 4.0, DARKGREEN);
 
         // Local player
         let my_color = if let Some(my_id) = game_state.my_id {
@@ -552,6 +607,17 @@ async fn main() {
             2.0,
             YELLOW,
         );
+        // Facing direction indicator: line from circle edge to half-diameter beyond
+        // Outer ring radius = 20, circle diameter = 40, half = 20 → tip at radius 40
+        {
+            let fx = game_state.facing_angle.cos();
+            let fy = game_state.facing_angle.sin();
+            let px = game_state.my_pos.0;
+            let py = game_state.my_pos.1;
+            draw_line(px + fx * 20.0, py + fy * 20.0,
+                      px + fx * 40.0, py + fy * 40.0,
+                      3.0, WHITE);
+        }
         {
             let dim = measure_text(&game_state.my_name, None, 20, 1.0);
             draw_text(
@@ -585,7 +651,7 @@ async fn main() {
         // Screen-space UI
         set_default_camera();
         draw_text(
-            "WASD/Arrows: move | Mouse edge: pan | Double-tap 1: center",
+            "Right-click: move | S: stop | Mouse edge: pan | Double-tap 1: center",
             10.0,
             20.0,
             18.0,
