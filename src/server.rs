@@ -612,12 +612,14 @@ async fn main() {
                 // `.await` point.  Each inner block drops it before the next await.
                 {
                     // Step 1: take a read snapshot (async – no rng yet)
-                    let snap: Vec<(u32, String, f32, f32, f32, f32)> = {
+                    // Tuple: (id, team, x, y, lane_dx, lane_dy, holding, hold_y)
+                    let snap: Vec<(u32, String, f32, f32, f32, f32, bool, f32)> = {
                         let creeps = patrol_creeps.read().await;
                         creeps.iter().map(|u| {
                             (u.creep.id, u.creep.team.clone(),
                              u.creep.x, u.creep.y,
-                             u.lane_dx, u.lane_dy)
+                             u.lane_dx, u.lane_dy,
+                             u.holding, u.hold_y)
                         }).collect()
                     };
 
@@ -656,18 +658,21 @@ async fn main() {
 
                             // Acquire a new random target when we have none
                             if unit.target_id.is_none() {
-                                let candidates: Vec<u32> = snap.iter().filter_map(|(id, team, tx, ty, ..)| {
+                                let candidates: Vec<u32> = snap.iter().filter_map(|(id, team, tx, ty, _, _, t_holding, t_hold_y)| {
                                     if *team == unit.creep.team { return None; }
+                                    // Target must also be on its own front row.
+                                    if !t_holding || t_hold_y.abs() >= 75.0 { return None; }
                                     let dx = tx - unit.creep.x;
                                     let dy = ty - unit.creep.y;
                                     let fwd = dx * unit.lane_dx + dy * unit.lane_dy;
                                     if fwd <= 0.0 { return None; }
                                     let lat = (dx * unit.lane_dy - dy * unit.lane_dx).abs();
                                     if unit.creep.type_ == "melee" {
-                                        if fwd <= 200.0 && lat <= 130.0 { Some(*id) } else { None }
+                                        // One row ahead (ROW_SPACING=80) + lateral ≤ one slot gap.
+                                        if fwd <= 120.0 && lat <= 130.0 { Some(*id) } else { None }
                                     } else {
-                                        // Ranged: any enemy in the column ahead within 650 fwd units.
-                                        if lat <= 200.0 && fwd <= 650.0 { Some(*id) } else { None }
+                                        // Ranged: same one-row forward limit, wider lateral.
+                                        if lat <= 200.0 && fwd <= 120.0 { Some(*id) } else { None }
                                     }
                                 }).collect();
                                 if !candidates.is_empty() {
