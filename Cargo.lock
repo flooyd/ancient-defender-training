@@ -571,6 +571,7 @@ dependencies = [
  "futures-util",
  "macroquad",
  "quad-net",
+ "rand 0.8.5",
  "rustls-pemfile",
  "serde",
  "tokio",
